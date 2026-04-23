@@ -1,0 +1,6 @@
+{
+  "name": "BeatLayer",
+  "description": "Upload MP3s and overlay custom drum machine patterns with real-time synthesis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["Audio Production", "Web Audio API", "Real-time Synthesis"]
+}
