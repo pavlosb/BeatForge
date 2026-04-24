@@ -3,7 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { analyze } from 'web-audio-beat-detector';
+
 export interface BeatPattern {
+  id: string;
   name: string;
   bpm: number;
   steps: {
@@ -13,8 +16,16 @@ export interface BeatPattern {
   };
 }
 
+export interface TimelineEvent {
+  id: string;
+  startTime: number;
+  endTime: number;
+  patternId: string;
+}
+
 export const DEFAULT_PATTERNS: BeatPattern[] = [
   {
+    id: "p1",
     name: "Classic 4/4",
     bpm: 120,
     steps: {
@@ -24,6 +35,7 @@ export const DEFAULT_PATTERNS: BeatPattern[] = [
     },
   },
   {
+    id: "p2",
     name: "Hip Hop",
     bpm: 90,
     steps: {
@@ -33,6 +45,7 @@ export const DEFAULT_PATTERNS: BeatPattern[] = [
     },
   },
   {
+    id: "p3",
     name: "Techno",
     bpm: 128,
     steps: {
@@ -53,7 +66,9 @@ export class AudioEngine {
   private isPlaying: boolean = false;
   private startTime: number = 0;
   private pauseTime: number = 0;
+  private patterns: BeatPattern[] = [...DEFAULT_PATTERNS];
   private currentPattern: BeatPattern = DEFAULT_PATTERNS[0];
+  private timeline: TimelineEvent[] = [];
   private nextStepTime: number = 0;
   private currentStep: number = 0;
   private schedulerTimer: number | null = null;
@@ -78,6 +93,25 @@ export class AudioEngine {
     const arrayBuffer = await file.arrayBuffer();
     this.trackBuffer = await this.ctx.decodeAudioData(arrayBuffer);
     return this.trackBuffer;
+  }
+
+  async detectBPM(): Promise<number> {
+    if (!this.trackBuffer) return 0;
+    try {
+      const bpm = await analyze(this.trackBuffer);
+      return Math.round(bpm * 10) / 10;
+    } catch (e) {
+      console.error("BPM detection failed", e);
+      return 0;
+    }
+  }
+
+  setPatterns(patterns: BeatPattern[]) {
+    this.patterns = patterns;
+  }
+
+  setTimeline(timeline: TimelineEvent[]) {
+    this.timeline = timeline;
   }
 
   setPattern(pattern: BeatPattern) {
@@ -112,24 +146,36 @@ export class AudioEngine {
     }
   }
 
-  public play() {
+  public play(offset?: number) {
     if (this.ctx.state === 'suspended') {
       this.ctx.resume();
     }
 
     if (this.trackBuffer) {
+      if (this.trackSource) {
+        this.trackSource.stop();
+        this.trackSource = null;
+      }
       this.trackSource = this.ctx.createBufferSource();
       this.trackSource.buffer = this.trackBuffer;
       this.trackSource.connect(this.trackGain);
       
-      const offset = this.pauseTime % this.trackBuffer.duration;
-      this.trackSource.start(0, offset);
-      this.startTime = this.ctx.currentTime - offset;
+      const playPos = offset !== undefined ? (offset % this.trackBuffer.duration) : (this.pauseTime % this.trackBuffer.duration);
+      this.trackSource.start(0, playPos);
+      this.startTime = this.ctx.currentTime - playPos;
+      this.pauseTime = playPos;
     }
 
     this.isPlaying = true;
-    this.currentStep = 0;
+    
+    // Calculate current step based on playPos and BPM
+    const songTime = offset !== undefined ? offset : this.pauseTime;
+    const beatDuration = 60 / this.currentPattern.bpm;
+    const stepDuration = beatDuration / 4;
+    this.currentStep = Math.floor((songTime % (stepDuration * 16)) / stepDuration);
     this.nextStepTime = this.ctx.currentTime;
+    
+    if (this.schedulerTimer) clearTimeout(this.schedulerTimer);
     this.scheduler();
   }
 
@@ -146,13 +192,34 @@ export class AudioEngine {
     }
   }
 
+  public seek(time: number) {
+    const wasPlaying = this.isPlaying;
+    this.stop();
+    this.pauseTime = time;
+    if (wasPlaying) {
+      this.play(time);
+    }
+  }
+
   private scheduler() {
     const scheduleAheadTime = 0.1;
     while (this.nextStepTime < this.ctx.currentTime + scheduleAheadTime) {
+      this.updateCurrentPatternFromTimeline();
       this.scheduleStep(this.currentStep, this.nextStepTime);
       this.nextStep();
     }
     this.schedulerTimer = window.setTimeout(() => this.scheduler(), 25);
+  }
+
+  private updateCurrentPatternFromTimeline() {
+    const songTime = this.ctx.currentTime - this.startTime;
+    const activeEvent = this.timeline.find(e => songTime >= e.startTime && songTime <= e.endTime);
+    if (activeEvent) {
+      const pattern = this.patterns.find(p => p.id === activeEvent.patternId);
+      if (pattern && pattern.id !== this.currentPattern.id) {
+        this.setPattern(pattern);
+      }
+    }
   }
 
   private nextStep() {
@@ -244,7 +311,9 @@ export class AudioEngine {
     return {
       isPlaying: this.isPlaying,
       currentPattern: this.currentPattern,
-      hasTrack: !!this.trackBuffer
+      hasTrack: !!this.trackBuffer,
+      currentTime: this.isPlaying ? (this.ctx.currentTime - this.startTime) : this.pauseTime,
+      duration: this.trackBuffer?.duration || 0
     };
   }
 }

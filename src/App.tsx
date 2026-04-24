@@ -14,10 +14,17 @@ import {
   VolumeX, 
   Activity,
   ChevronRight,
-  Settings2
+  Settings2,
+  Plus,
+  Trash2,
+  Timer,
+  Clock,
+  Layers
 } from 'lucide-react';
 import React, { useState, useRef, useEffect, useCallback, ChangeEvent } from 'react';
-import { AudioEngine, DEFAULT_PATTERNS, BeatPattern } from './lib/audioEngine';
+import { AudioEngine, DEFAULT_PATTERNS, BeatPattern, TimelineEvent } from './lib/audioEngine';
+
+const generateId = () => Math.random().toString(36).substring(2, 9);
 
 export default function App() {
   const [engine] = useState(() => new AudioEngine());
@@ -26,13 +33,36 @@ export default function App() {
   const [fileName, setFileName] = useState("");
   const [trackVolume, setTrackVolume] = useState(0.8);
   const [beatVolume, setBeatVolume] = useState(0.5);
+  const [patterns, setPatterns] = useState<BeatPattern[]>(DEFAULT_PATTERNS);
   const [selectedPattern, setSelectedPattern] = useState(DEFAULT_PATTERNS[0]);
-  const [isHovering, setIsHovering] = useState(false);
-  
-  const [bpm, setBpm] = useState(DEFAULT_PATTERNS[0].bpm);
+  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
+  const [bpm, setBpm] = useState(DEFAULT_PATTERNS[0].bpm.toString());
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const timelineRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number>(0);
+
+  // Sync engine state
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const state = engine.getState();
+      setIsPlaying(state.isPlaying);
+      setCurrentTime(state.currentTime);
+      setDuration(state.duration);
+    }, 100);
+    return () => clearInterval(timer);
+  }, [engine]);
+
+  useEffect(() => {
+    engine.setPatterns(patterns);
+  }, [patterns, engine]);
+
+  useEffect(() => {
+    engine.setTimeline(timeline);
+  }, [timeline, engine]);
 
   const drawVisualizer = useCallback(() => {
     if (!canvasRef.current) return;
@@ -65,9 +95,28 @@ export default function App() {
         ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
         x += barWidth + 1;
       }
+
+      // Draw Beat Grid
+      if (hasFile && duration > 0) {
+        const bpmVal = parseFloat(bpm);
+        if (!isNaN(bpmVal)) {
+          const secondsPerBeat = 60 / bpmVal;
+          const pixelPerSecond = canvas.width / duration;
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+          ctx.lineWidth = 1;
+
+          for (let t = 0; t < duration; t += secondsPerBeat) {
+            const beatX = t * pixelPerSecond;
+            ctx.beginPath();
+            ctx.moveTo(beatX, 0);
+            ctx.lineTo(beatX, canvas.height);
+            ctx.stroke();
+          }
+        }
+      }
     };
     draw();
-  }, [engine]);
+  }, [engine, bpm, hasFile, duration]);
 
   useEffect(() => {
     drawVisualizer();
@@ -80,28 +129,97 @@ export default function App() {
       setFileName(file.name);
       await engine.loadTrack(file);
       setHasFile(true);
+      
+      // Auto analysis
+      setIsAnalyzing(true);
+      const detectedBpm = await engine.detectBPM();
+      if (detectedBpm) {
+        handleBpmChange(detectedBpm.toString());
+      }
+      setIsAnalyzing(false);
     }
   };
 
   const togglePlayback = () => {
     engine.toggle();
-    setIsPlaying(engine.getState().isPlaying);
+    const state = engine.getState();
+    setIsPlaying(state.isPlaying);
   };
 
   const changePattern = (pattern: BeatPattern) => {
     setSelectedPattern(pattern);
-    setBpm(pattern.bpm);
+    setBpm(pattern.bpm.toString());
     engine.setPattern(pattern);
   };
 
   const toggleStep = (instrument: 'k' | 's' | 'h', step: number) => {
     engine.toggleStep(instrument, step);
-    setSelectedPattern({ ...selectedPattern });
+    // Get fresh state from engine to ensure React recognizes the change
+    const state = engine.getState();
+    const updatedPattern = { ...state.currentPattern };
+    setSelectedPattern(updatedPattern);
+    setPatterns(prev => prev.map(p => p.id === updatedPattern.id ? updatedPattern : p));
   };
 
-  const handleBpmChange = (val: number) => {
+  const handleBpmChange = (val: string) => {
     setBpm(val);
-    engine.setBPM(val);
+    const num = parseFloat(val);
+    if (!isNaN(num)) {
+      engine.setBPM(num);
+      setSelectedPattern(prev => ({ ...prev, bpm: num }));
+      setPatterns(prev => prev.map(p => p.id === selectedPattern.id ? { ...p, bpm: num } : p));
+    }
+  };
+
+  const addNewPattern = () => {
+    const newPattern: BeatPattern = {
+      id: generateId(),
+      name: `Pattern ${patterns.length + 1}`,
+      bpm: parseFloat(bpm) || 120,
+      steps: {
+        k: Array(16).fill(false),
+        s: Array(16).fill(false),
+        h: Array(16).fill(false),
+      }
+    };
+    setPatterns([...patterns, newPattern]);
+    changePattern(newPattern);
+  };
+
+  const updatePatternName = (id: string, name: string) => {
+    setPatterns(prev => prev.map(p => p.id === id ? { ...p, name } : p));
+  };
+
+  const deletePattern = (id: string) => {
+    if (patterns.length <= 1) return;
+    const newPatterns = patterns.filter(p => p.id !== id);
+    setPatterns(newPatterns);
+    if (selectedPattern.id === id) {
+      changePattern(newPatterns[0]);
+    }
+  };
+
+  const addToTimeline = (patternId: string) => {
+    const newEvent: TimelineEvent = {
+      id: generateId(),
+      patternId,
+      startTime: currentTime,
+      endTime: Math.min(currentTime + 5, duration || currentTime + 5)
+    };
+    setTimeline([...timeline, newEvent]);
+  };
+
+  const removeTimelineEvent = (id: string) => {
+    setTimeline(prev => prev.filter(e => e.id !== id));
+  };
+
+  const handleTimelineClick = (e: React.MouseEvent) => {
+    if (!timelineRef.current || !duration) return;
+    const rect = timelineRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const pos = x / rect.width;
+    const seekTime = pos * duration;
+    engine.seek(seekTime);
   };
 
   const updateTrackVolume = (val: number) => {
@@ -151,12 +269,24 @@ export default function App() {
                   <Activity className="w-3 h-3" /> Tempo
                 </span>
                 <div className="flex flex-col items-end gap-1">
-                  <span className="font-mono text-indigo-400">{bpm} BPM</span>
+                  <div className="flex items-center gap-1">
+                    <input 
+                      type="number" 
+                      step="0.1"
+                      value={bpm}
+                      onChange={(e) => handleBpmChange(e.target.value)}
+                      className="bg-slate-800 border-none text-indigo-400 font-mono text-right w-16 focus:ring-0 focus:outline-none rounded px-1"
+                    />
+                    <span className="text-[10px] text-slate-500">BPM</span>
+                  </div>
                   <input 
-                    type="range" min="40" max="220" step="1" value={bpm}
-                    onChange={(e) => handleBpmChange(parseInt(e.target.value))}
+                    type="range" min="40" max="220" step="0.1" value={bpm}
+                    onChange={(e) => handleBpmChange(e.target.value)}
                     className="w-24 h-1 bg-slate-800 rounded-full appearance-none cursor-pointer accent-indigo-500"
                   />
+                  {isAnalyzing && (
+                    <span className="text-[8px] text-indigo-500 animate-pulse uppercase font-bold">Analyzing...</span>
+                  )}
                 </div>
               </div>
               <div className="flex justify-between text-sm">
@@ -227,14 +357,71 @@ export default function App() {
         {/* Main Editor Area */}
         <main className="flex-1 bg-slate-950 p-6 flex flex-col gap-6 overflow-y-auto">
           
+          {/* Timeline View */}
+          <div className="h-24 bg-slate-900 rounded-xl border border-slate-800 flex flex-col overflow-hidden shrink-0">
+            <div className="h-6 border-b border-slate-800 flex items-center px-4 justify-between bg-slate-950/30">
+              <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1">
+                <Clock className="w-2 h-2" /> Song Timeline
+              </span>
+              <span className="text-[9px] font-mono text-slate-500 uppercase">
+                {Math.floor(currentTime / 60)}:{(currentTime % 60).toFixed(2).padStart(5, '0')} / 
+                {Math.floor(duration / 60)}:{(duration % 60).toFixed(0).padStart(2, '0')}
+              </span>
+            </div>
+            <div 
+              ref={timelineRef}
+              className="flex-1 relative cursor-crosshair group"
+              onClick={handleTimelineClick}
+            >
+              {/* Playhead */}
+              {duration > 0 && (
+                <div 
+                  className="absolute top-0 bottom-0 w-px bg-white z-20 shadow-[0_0_8px_white]"
+                  style={{ left: `${(currentTime / duration) * 100}%` }}
+                />
+              )}
+              
+              {/* Timeline Events */}
+              {timeline.map(event => (
+                <div 
+                  key={event.id}
+                  className="absolute top-1 bottom-1 bg-indigo-500/40 border border-indigo-400/50 rounded p-1 overflow-hidden flex items-center justify-between group/event"
+                  style={{ 
+                    left: `${(event.startTime / duration) * 100}%`,
+                    width: `${((event.endTime - event.startTime) / duration) * 100}%`
+                  }}
+                >
+                  <span className="text-[8px] font-bold text-indigo-100 truncate whitespace-nowrap">
+                    {patterns.find(p => p.id === event.patternId)?.name}
+                  </span>
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); removeTimelineEvent(event.id); }}
+                    className="opacity-0 group-hover/event:opacity-100 hover:text-red-400 transition-opacity"
+                  >
+                    <Trash2 className="w-2.5 h-2.5" />
+                  </button>
+                </div>
+              ))}
+
+              {/* Empty background with grid */}
+              <div className="absolute inset-0 opacity-10 pointer-events-none">
+                <div className="h-full w-full" style={{ backgroundSize: '20px 100%', backgroundImage: 'linear-gradient(90deg, #fff 1px, transparent 0)' }}></div>
+              </div>
+            </div>
+          </div>
+
           {/* Waveform Visualizer */}
-          <div className="h-48 bg-slate-900 rounded-xl border border-slate-800 relative overflow-hidden shrink-0">
+          <div className="h-32 bg-slate-900 rounded-xl border border-slate-800 relative overflow-hidden shrink-0 cursor-pointer" onClick={handleTimelineClick}>
             <canvas 
               ref={canvasRef} 
               width={1000} 
               height={200} 
               className="absolute inset-0 w-full h-full object-cover opacity-40"
             />
+            
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <div className="w-full h-px bg-white/10"></div>
+            </div>
             
             {!hasFile && (
               <div className="absolute inset-0 flex items-center justify-center">
@@ -247,9 +434,8 @@ export default function App() {
               </div>
             )}
 
-            <div className="absolute left-1/2 top-0 bottom-0 w-px bg-white shadow-[0_0_10px_white] z-10"></div>
             <div className="absolute bottom-3 left-3 bg-slate-800/80 px-2 py-1 rounded text-[10px] font-mono text-slate-300">
-              00:42.500 / {hasFile ? '03:42.000' : '--:--.---'}
+              {Math.floor(currentTime / 60)}:{(currentTime % 60).toFixed(3).padStart(6, '0')} / {duration ? `${Math.floor(duration / 60)}:${(duration % 60).toFixed(0).padStart(2, '0')}` : '--:--.---'}
             </div>
           </div>
 
@@ -268,27 +454,65 @@ export default function App() {
             <div className="flex-1 p-6 flex gap-8 overflow-hidden">
               {/* Pattern Selector */}
               <div className="w-1/3 flex flex-col gap-2 overflow-y-auto pr-2">
-                <label className="text-[10px] font-bold text-slate-500 uppercase px-2 mb-2">Preset Patterns</label>
-                {DEFAULT_PATTERNS.map((pattern) => (
-                  <button
-                    key={pattern.name}
-                    onClick={() => changePattern(pattern)}
-                    className={`text-left p-4 rounded-xl flex items-center justify-between transition-all group ${
-                      selectedPattern.name === pattern.name 
-                      ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' 
-                      : 'hover:bg-slate-800 text-slate-400'
+                <div className="flex items-center justify-between px-2 mb-2">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase">Presets & Memory</label>
+                  <button 
+                    onClick={addNewPattern}
+                    className="w-5 h-5 bg-slate-800 hover:bg-indigo-600 rounded flex items-center justify-center transition-colors group/add"
+                  >
+                    <Plus className="w-3 h-3 text-slate-400 group-hover/add:text-white" />
+                  </button>
+                </div>
+                {patterns.map((pattern) => (
+                  <div
+                    key={pattern.id}
+                    className={`group relative rounded-xl transition-all ${
+                      selectedPattern.id === pattern.id 
+                      ? 'bg-indigo-600 shadow-lg shadow-indigo-500/20' 
+                      : 'hover:bg-slate-800 bg-slate-900/40'
                     }`}
                   >
-                    <div className="truncate">
-                      <p className={`text-sm font-bold ${selectedPattern.name === pattern.name ? 'text-white' : 'text-slate-200'}`}>
-                        {pattern.name}
-                      </p>
-                      <p className="text-[10px] font-mono opacity-60 uppercase">{pattern.bpm} BPM</p>
+                    <div className="w-full p-4 flex items-center justify-between">
+                      <button
+                        onClick={() => changePattern(pattern)}
+                        className="truncate flex-1 text-left group/name focus:outline-none"
+                      >
+                        <input 
+                          type="text"
+                          value={pattern.name}
+                          onChange={(e) => updatePatternName(pattern.id, e.target.value)}
+                          className={`bg-transparent border-none p-0 text-sm font-bold w-full focus:ring-0 cursor-text ${
+                            selectedPattern.id === pattern.id ? 'text-white' : 'text-slate-200'
+                          }`}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                        <p className={`text-[10px] font-mono opacity-60 uppercase ${
+                          selectedPattern.id === pattern.id ? 'text-indigo-100' : 'text-slate-500'
+                        }`}>
+                          {pattern.bpm} BPM
+                        </p>
+                      </button>
+                      <div className="flex items-center gap-1">
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); addToTimeline(pattern.id); }}
+                          className={`p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity hover:bg-white/10 ${
+                            selectedPattern.id === pattern.id ? 'text-white' : 'text-slate-400'
+                          }`}
+                          title="Add to Timeline"
+                        >
+                          <Clock className="w-3.5 h-3.5" />
+                        </button>
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); deletePattern(pattern.id); }}
+                          className={`p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500/20 hover:text-red-400 ${
+                            selectedPattern.id === pattern.id ? 'text-white' : 'text-slate-400'
+                          }`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
-                    <ChevronRight className={`w-4 h-4 shrink-0 transition-transform group-hover:translate-x-1 ${
-                      selectedPattern.name === pattern.name ? 'text-white' : 'text-slate-600'
-                    }`} />
-                  </button>
+                  </div>
                 ))}
               </div>
 
@@ -298,12 +522,12 @@ export default function App() {
                   {/* Kick Row */}
                   <div className="flex items-center gap-4">
                     <span className="w-16 text-[10px] font-bold text-slate-500">KICK</span>
-                    <div className="flex-1 grid grid-cols-16 gap-1.5">
+                    <div className="flex-1 grid grid-cols-[repeat(16,1fr)] gap-1">
                       {selectedPattern.steps.k.map((on, i) => (
                         <button 
                           key={i} 
                           onClick={() => toggleStep('k', i)}
-                          className={`h-10 rounded-sm border transition-all ${on ? 'bg-indigo-600 border-indigo-400 shadow-[0_0_8px_rgba(79,70,229,0.4)]' : 'bg-slate-800 border-transparent hover:bg-slate-700'}`} 
+                          className={`h-8 rounded-[2px] border transition-all ${on ? 'bg-indigo-500 border-indigo-300 shadow-[0_0_10px_rgba(99,102,241,0.5)]' : 'bg-slate-800 border-transparent hover:bg-slate-700'}`} 
                         />
                       ))}
                     </div>
@@ -311,12 +535,12 @@ export default function App() {
                   {/* Snare Row */}
                   <div className="flex items-center gap-4">
                     <span className="w-16 text-[10px] font-bold text-slate-500">SNARE</span>
-                    <div className="flex-1 grid grid-cols-16 gap-1.5">
+                    <div className="flex-1 grid grid-cols-[repeat(16,1fr)] gap-1">
                       {selectedPattern.steps.s.map((on, i) => (
                         <button 
                           key={i} 
                           onClick={() => toggleStep('s', i)}
-                          className={`h-10 rounded-sm border transition-all ${on ? 'bg-indigo-600 border-indigo-400 shadow-[0_0_8px_rgba(79,70,229,0.4)]' : 'bg-slate-800 border-transparent hover:bg-slate-700'}`} 
+                          className={`h-8 rounded-[2px] border transition-all ${on ? 'bg-indigo-400 border-indigo-200 shadow-[0_0_10px_rgba(129,140,248,0.5)]' : 'bg-slate-800 border-transparent hover:bg-slate-700'}`} 
                         />
                       ))}
                     </div>
@@ -324,12 +548,12 @@ export default function App() {
                   {/* HiHat Row */}
                   <div className="flex items-center gap-4">
                     <span className="w-16 text-[10px] font-bold text-slate-500">HI-HAT</span>
-                    <div className="flex-1 grid grid-cols-16 gap-1.5">
+                    <div className="flex-1 grid grid-cols-[repeat(16,1fr)] gap-1">
                       {selectedPattern.steps.h.map((on, i) => (
                         <button 
                           key={i} 
                           onClick={() => toggleStep('h', i)}
-                          className={`h-10 rounded-sm border transition-all ${on ? 'bg-slate-500 border-slate-300' : 'bg-slate-800 border-transparent hover:bg-slate-700'}`} 
+                          className={`h-8 rounded-[2px] border transition-all ${on ? 'bg-slate-400 border-slate-200 shadow-[0_0_10px_rgba(148,163,184,0.4)]' : 'bg-slate-800 border-transparent hover:bg-slate-700'}`} 
                         />
                       ))}
                     </div>
@@ -369,13 +593,10 @@ export default function App() {
           <div className="h-24 bg-slate-900 rounded-xl border border-slate-800 flex items-center px-8 gap-8 md:gap-12 shadow-2xl shrink-0">
             <div className="flex items-center gap-6">
               <button 
-                onClick={() => {
-                  engine.stop();
-                  setIsPlaying(false);
-                }}
+                onClick={() => engine.seek(0)}
                 className="text-slate-400 hover:text-white transition-colors"
               >
-                <div className="w-8 h-8 flex items-center justify-center">⏮</div>
+                <div className="w-8 h-8 flex items-center justify-center font-bold">⏮</div>
               </button>
               
               <motion.button 
