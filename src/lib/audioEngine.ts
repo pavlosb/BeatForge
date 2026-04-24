@@ -81,7 +81,15 @@ export class AudioEngine {
   }
 
   setPattern(pattern: BeatPattern) {
-    this.currentPattern = pattern;
+    this.currentPattern = JSON.parse(JSON.stringify(pattern)); // Deep copy to allow local modifications
+  }
+
+  setBPM(bpm: number) {
+    this.currentPattern.bpm = bpm;
+  }
+
+  toggleStep(instrument: 'k' | 's' | 'h', step: number) {
+    this.currentPattern.steps[instrument][step] = !this.currentPattern.steps[instrument][step];
   }
 
   setTrackVolume(val: number) {

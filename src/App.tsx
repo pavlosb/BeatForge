@@ -29,6 +29,8 @@ export default function App() {
   const [selectedPattern, setSelectedPattern] = useState(DEFAULT_PATTERNS[0]);
   const [isHovering, setIsHovering] = useState(false);
   
+  const [bpm, setBpm] = useState(DEFAULT_PATTERNS[0].bpm);
+  
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number>(0);
 
@@ -88,7 +90,18 @@ export default function App() {
 
   const changePattern = (pattern: BeatPattern) => {
     setSelectedPattern(pattern);
+    setBpm(pattern.bpm);
     engine.setPattern(pattern);
+  };
+
+  const toggleStep = (instrument: 'k' | 's' | 'h', step: number) => {
+    engine.toggleStep(instrument, step);
+    setSelectedPattern({ ...selectedPattern });
+  };
+
+  const handleBpmChange = (val: number) => {
+    setBpm(val);
+    engine.setBPM(val);
   };
 
   const updateTrackVolume = (val: number) => {
@@ -137,7 +150,14 @@ export default function App() {
                 <span className="text-slate-400 flex items-center gap-2">
                   <Activity className="w-3 h-3" /> Tempo
                 </span>
-                <span className="font-mono text-indigo-400">{selectedPattern.bpm} BPM</span>
+                <div className="flex flex-col items-end gap-1">
+                  <span className="font-mono text-indigo-400">{bpm} BPM</span>
+                  <input 
+                    type="range" min="40" max="220" step="1" value={bpm}
+                    onChange={(e) => handleBpmChange(parseInt(e.target.value))}
+                    className="w-24 h-1 bg-slate-800 rounded-full appearance-none cursor-pointer accent-indigo-500"
+                  />
+                </div>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-slate-400">Key</span>
@@ -280,7 +300,11 @@ export default function App() {
                     <span className="w-16 text-[10px] font-bold text-slate-500">KICK</span>
                     <div className="flex-1 grid grid-cols-16 gap-1.5">
                       {selectedPattern.steps.k.map((on, i) => (
-                        <div key={i} className={`h-10 rounded-sm border ${on ? 'bg-indigo-600 border-indigo-400 shadow-[0_0_8px_rgba(79,70,229,0.4)]' : 'bg-slate-800 border-transparent'}`} />
+                        <button 
+                          key={i} 
+                          onClick={() => toggleStep('k', i)}
+                          className={`h-10 rounded-sm border transition-all ${on ? 'bg-indigo-600 border-indigo-400 shadow-[0_0_8px_rgba(79,70,229,0.4)]' : 'bg-slate-800 border-transparent hover:bg-slate-700'}`} 
+                        />
                       ))}
                     </div>
                   </div>
@@ -289,7 +313,11 @@ export default function App() {
                     <span className="w-16 text-[10px] font-bold text-slate-500">SNARE</span>
                     <div className="flex-1 grid grid-cols-16 gap-1.5">
                       {selectedPattern.steps.s.map((on, i) => (
-                        <div key={i} className={`h-10 rounded-sm border ${on ? 'bg-indigo-600 border-indigo-400 shadow-[0_0_8px_rgba(79,70,229,0.4)]' : 'bg-slate-800 border-transparent'}`} />
+                        <button 
+                          key={i} 
+                          onClick={() => toggleStep('s', i)}
+                          className={`h-10 rounded-sm border transition-all ${on ? 'bg-indigo-600 border-indigo-400 shadow-[0_0_8px_rgba(79,70,229,0.4)]' : 'bg-slate-800 border-transparent hover:bg-slate-700'}`} 
+                        />
                       ))}
                     </div>
                   </div>
@@ -298,7 +326,11 @@ export default function App() {
                     <span className="w-16 text-[10px] font-bold text-slate-500">HI-HAT</span>
                     <div className="flex-1 grid grid-cols-16 gap-1.5">
                       {selectedPattern.steps.h.map((on, i) => (
-                        <div key={i} className={`h-10 rounded-sm border ${on ? 'bg-slate-700 border-slate-500' : 'bg-slate-800 border-transparent'}`} />
+                        <button 
+                          key={i} 
+                          onClick={() => toggleStep('h', i)}
+                          className={`h-10 rounded-sm border transition-all ${on ? 'bg-slate-500 border-slate-300' : 'bg-slate-800 border-transparent hover:bg-slate-700'}`} 
+                        />
                       ))}
                     </div>
                   </div>
